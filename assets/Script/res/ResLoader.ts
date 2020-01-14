@@ -25,7 +25,7 @@ interface LoadResArgs {
     url?: string,
     urls?: string[],
     type?: typeof cc.Asset,
-    onCompleted?: CompletedCallback,
+    onCompleted?: (CompletedCallback | CompletedArrayCallback),
     onProgess?: ProcessCallback,
     use?: string,
 }
@@ -162,11 +162,14 @@ export default class ResLoader {
         if (item && item.dependKeys && Array.isArray(item.dependKeys)) {
             for (let depKey of item.dependKeys) {
                 // 记录该资源被我引用
-                this.getCacheInfo(depKey).refs.add(refKey);
-                cc.log(`${depKey} ref by ${refKey}`);
-                let ccloader: any = cc.loader;
-                let depItem = ccloader._cache[depKey]
-                this._buildDepend(depItem, refKey);
+                let cacheInfo = this.getCacheInfo(depKey);
+                if (!cacheInfo.refs.has(refKey)) {
+                    this.getCacheInfo(depKey).refs.add(refKey);
+                    cc.log(`${depKey} ref by ${refKey}`);
+                    let ccloader: any = cc.loader;
+                    let depItem = ccloader._cache[depKey]
+                    this._buildDepend(depItem, depItem && depItem.id ? depItem.id : refKey);
+                }
             }
         }
     }
@@ -174,18 +177,16 @@ export default class ResLoader {
     private _finishItem(url: string, assetType: typeof cc.Asset, use?: string) {
         let item = this._getResItem(url, assetType);
         if (item && item.id) {
-            this._buildDepend(item, item.id);
-        } else {
-            cc.warn(`addDependKey item error! for ${url}`);
-        }
-
-        // 添加自身引用
-        if (item) {
             let info = this.getCacheInfo(item.id);
-            info.refs.add(item.id);
             if (use) {
                 info.uses.add(use);
             }
+            if (!info.refs.has(item.id)) {
+                info.refs.add(item.id);
+                this._buildDepend(item, item.id);
+            }
+        } else {
+            cc.warn(`addDependKey item error! for ${url}`);
         }
     }
 
@@ -326,28 +327,25 @@ export default class ResLoader {
 
     // 释放一个资源
     private _release(item, itemUrl) {
-        if (!item) {
+        let cacheInfo = this.getCacheInfo(item.id);
+        if (!item || !cacheInfo.refs.has(itemUrl)) {
             return;
         }
-        let cacheInfo = this.getCacheInfo(item.id);
+
         // 解除自身对自己的引用
         cacheInfo.refs.delete(itemUrl);
-        // 解除引用
-        let delDependKey = (item, refKey) => {
-            if (item && item.dependKeys && Array.isArray(item.dependKeys)) {
+        let ccloader: any = cc.loader;
+        if (cacheInfo.uses.size == 0 && cacheInfo.refs.size == 0) {
+            if (item.dependKeys && Array.isArray(item.dependKeys)) {
                 for (let depKey of item.dependKeys) {
-                    let ccloader: any = cc.loader;
                     let depItem = ccloader._cache[depKey]
-                    this._release(depItem, refKey);
+                    this._release(depItem, item.id);
                 }
             }
-        }
-        delDependKey(item, itemUrl);
 
-        if (cacheInfo.uses.size == 0 && cacheInfo.refs.size == 0) {
             //如果没有uuid,就直接释放url
-            if (this._isSceneDepend(item.url)) {
-                cc.log("resloader skip release scene depend assets :" + item.url);
+            if (this._isSceneDepend(item.id)) {
+                cc.log("resloader skip release scene depend assets :" + item.id);
             } else if (item.uuid) {
                 cc.loader.release(item.uuid);
                 cc.log("resloader release item by uuid :" + item.id);
